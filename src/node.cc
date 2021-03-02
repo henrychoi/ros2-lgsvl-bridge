@@ -11,6 +11,7 @@
 
 #include <cstring>
 #include <chrono>
+#include <boost/format.hpp>
 
 Node::Node(rcl_allocator_t* alloc, rcl_context_t* context)
     : running(true)
@@ -283,7 +284,11 @@ void Node::add_publisher(const std::string& topic, const std::string& type, std:
 
     rcl_publisher_t pub = rcl_get_zero_initialized_publisher();
     rcl_publisher_options_t pub_opt = rcl_publisher_get_default_options();
-
+    if (topic.find("imu") != std::string::npos) { // we are dropping IMU message for some reason
+        pub_opt.qos.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
+        pub_opt.qos.depth = 200;
+        pub_opt.qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+    }
     rcl_ret_t rc = rcl_publisher_init(&pub, &node, message_type->type_support, topic.c_str(), &pub_opt);
     if (rc != RCL_RET_OK)
     {
@@ -318,10 +323,22 @@ void Node::publish(const std::string& topic, const std::vector<uint8_t>& data)
     {
         if (type->init(msg))
         {
-            DEBUG("Unserializing message for " << topic << " topic");
+            //DEBUG("Unserializing message for " << topic << " topic");
+            rcl_ret_t rc;
             if (Unserialize(msg, type->introspection, data))
             {
-                rcl_ret_t rc = rcl_publish(pub, msg, NULL);
+                if (topic.find("imu") != std::string::npos) {
+                    const uint32_t* p = (const uint32_t*)data.data();
+                    DEBUG(boost::str(boost::format("imu@%u.%09u") % p[2] % p[1]));
+                    static uint64_t sPrevTimestamp = 0;
+                    const uint64_t timestamp = ((uint64_t)p[2]) << 32 | p[1];
+                    if (timestamp != sPrevTimestamp) {
+                        rc = rcl_publish(pub, msg, NULL);
+                    }
+                    sPrevTimestamp = timestamp;
+                } else {
+                    rc = rcl_publish(pub, msg, NULL);
+                }
                 if (rc != RCL_RET_OK)
                 {
                     ERROR("rcl_publish failed: " << rc);
